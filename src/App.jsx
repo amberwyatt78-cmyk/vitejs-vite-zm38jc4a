@@ -85,8 +85,14 @@ export default function FootyManager() {
   }, [running, quarter]);
 
   const togglePlayer = (id) => {
+    const onFieldCount = players.filter((p) => p.onField).length;
     setPlayers((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, onField: !p.onField } : p))
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        // Block adding to field if already at 16
+        if (!p.onField && onFieldCount >= 16) return p;
+        return { ...p, onField: !p.onField };
+      })
     );
   };
 
@@ -208,9 +214,9 @@ export default function FootyManager() {
                   ON FIELD
                   <span style={styles.badge}>{onField.length}</span>
                 </div>
-                {onField.length !== 18 && (
-                  <span style={{ ...styles.hint, color: onField.length > 18 ? "#ff5f57" : "#ffd60a" }}>
-                    {onField.length > 18 ? "⚠ Too many!" : `${18 - onField.length} spots left`}
+                {onField.length !== 16 && (
+                  <span style={{ ...styles.hint, color: onField.length > 16 ? "#ff5f57" : "#ffd60a" }}>
+                    {onField.length > 16 ? "⚠ Too many!" : `${16 - onField.length} spots left`}
                   </span>
                 )}
               </div>
@@ -681,3 +687,4 @@ const styles = {
     marginRight: 6,
   },
 };
+
