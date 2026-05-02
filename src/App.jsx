@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 
 const QUARTERS = [1, 2, 3, 4];
-const QUARTER_DURATION = 20 * 60; // 20 minutes in seconds
+const QUARTER_DURATION = 20 * 60; // 20 min in seconds
+const TOTAL_GAME_SECONDS = 80 * 60; // 80 min in seconds
 
 const INITIAL_PLAYERS = [
   'Max ADJUK',
@@ -28,50 +29,63 @@ const INITIAL_PLAYERS = [
   'Jack WHITE',
 ];
 
-const formatTime = (seconds) => {
-  const m = Math.floor(seconds / 60).toString().padStart(2, "0");
-  const s = (seconds % 60).toString().padStart(2, "0");
+const formatTime = (secs) => {
+  const m = Math.floor(secs / 60).toString().padStart(2, "0");
+  const s = (secs % 60).toString().padStart(2, "0");
   return `${m}:${s}`;
 };
 
-const pct = (fieldTime, totalGameTime) =>
-  totalGameTime > 0 ? Math.round((fieldTime / totalGameTime) * 100) : 0;
+// % of elapsed game time (updates live as game progresses)
+const gamePct = (fieldSecs, elapsedGameSecs) =>
+  elapsedGameSecs > 0
+    ? Math.min(100, Math.round((fieldSecs / elapsedGameSecs) * 100))
+    : 0;
+
+const makePlayer = (name, id) => ({
+  id,
+  name,
+  onField: false,
+  fieldTime: 0,        // cumulative total seconds on field across entire game
+  quarterTimes: [0, 0, 0, 0], // field seconds broken down per quarter
+});
 
 export default function FootyManager() {
   const [players, setPlayers] = useState(
-    INITIAL_PLAYERS.map((name, i) => ({
-      id: i,
-      name,
-      onField: false,
-      fieldTime: [0, 0, 0, 0],
-    }))
+    INITIAL_PLAYERS.map((name, i) => makePlayer(name, i))
   );
   const [quarter, setQuarter] = useState(1);
   const [running, setRunning] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
+  const [elapsed, setElapsed] = useState(0); // quarter clock
+  const [totalGameElapsed, setTotalGameElapsed] = useState(0); // entire game clock
   const [view, setView] = useState("field");
   const [newName, setNewName] = useState("");
   const intervalRef = useRef(null);
   const lastTickRef = useRef(null);
 
-  // Main game clock + player time accumulation every second
+  // Every second: advance quarter clock + add 1s to every on-field player
   useEffect(() => {
     if (running) {
       lastTickRef.current = Date.now();
       intervalRef.current = setInterval(() => {
         const now = Date.now();
-        const deltaSec = Math.round((now - lastTickRef.current) / 1000);
+        const delta = Math.round((now - lastTickRef.current) / 1000);
         lastTickRef.current = now;
 
-        setElapsed((e) => Math.min(e + deltaSec, QUARTER_DURATION));
+        // Advance quarter clock, cap at quarter duration
+        setElapsed((e) => Math.min(e + delta, QUARTER_DURATION));
 
+        // Advance total game clock, cap at full game duration
+        setTotalGameElapsed((t) => Math.min(t + delta, TOTAL_GAME_SECONDS));
+
+        // Add delta only to players currently on field
         setPlayers((prev) =>
           prev.map((p) =>
             p.onField
               ? {
                   ...p,
-                  fieldTime: p.fieldTime.map((t, qi) =>
-                    qi === quarter - 1 ? t + deltaSec : t
+                  fieldTime: p.fieldTime + delta,
+                  quarterTimes: p.quarterTimes.map((t, qi) =>
+                    qi === quarter - 1 ? t + delta : t
                   ),
                 }
               : p
@@ -89,67 +103,60 @@ export default function FootyManager() {
     setPlayers((prev) =>
       prev.map((p) => {
         if (p.id !== id) return p;
-        // Block adding to field if already at 16
-        if (!p.onField && onFieldCount >= 16) return p;
+        if (!p.onField && onFieldCount >= 16) return p; // hard cap at 16
         return { ...p, onField: !p.onField };
       })
     );
   };
 
-  const onField = players.filter((p) => p.onField);
-  const onBench = players.filter((p) => !p.onField);
+  const onFieldPlayers = players.filter((p) => p.onField);
+  const benchPlayers = players.filter((p) => !p.onField);
 
   const nextQuarter = () => {
     setRunning(false);
-    setPlayers((prev) => prev.map((p) => ({ ...p, onField: false })));
-    setElapsed(0);
+    setElapsed(0); // reset quarter clock only
+    // players and their fieldTime carry over — no reset
     if (quarter < 4) setQuarter((q) => q + 1);
   };
 
   const resetAll = () => {
     setRunning(false);
     setElapsed(0);
+    setTotalGameElapsed(0);
     setQuarter(1);
-    setPlayers((prev) =>
-      prev.map((p) => ({ ...p, onField: false, fieldTime: [0, 0, 0, 0] }))
-    );
+    setPlayers((prev) => prev.map((p) => ({ ...p, onField: false, fieldTime: 0, quarterTimes: [0, 0, 0, 0] })));
   };
 
   const addPlayer = () => {
     const trimmed = newName.trim();
     if (!trimmed) return;
-    setPlayers((prev) => [
-      ...prev,
-      { id: Date.now(), name: trimmed, onField: false, fieldTime: [0, 0, 0, 0] },
-    ]);
+    setPlayers((prev) => [...prev, makePlayer(trimmed, Date.now())]);
     setNewName("");
   };
 
-  const removePlayer = (id) => {
+  const removePlayer = (id) =>
     setPlayers((prev) => prev.filter((p) => p.id !== id));
-  };
 
-  // Total game time elapsed across all quarters — used for % calculation
-  const totalGameElapsed = (quarter - 1) * QUARTER_DURATION + elapsed;
   const quarterProgress = (elapsed / QUARTER_DURATION) * 100;
 
   return (
-    <div style={styles.root}>
-      <div style={styles.grain} />
+    <div style={S.root}>
+      <div style={S.grain} />
 
-      <header style={styles.header}>
-        <div style={styles.logo}>
-          <span style={styles.logoIcon}>🏉</span>
+      {/* Header */}
+      <header style={S.header}>
+        <div style={S.logo}>
+          <span style={S.logoIcon}>🏉</span>
           <div>
-            <div style={styles.logoTitle}>FIELD BOSS</div>
-            <div style={styles.logoSub}>Junior Footy Time Manager</div>
+            <div style={S.logoTitle}>FIELD BOSS</div>
+            <div style={S.logoSub}>Junior Footy Time Manager</div>
           </div>
         </div>
-        <nav style={styles.nav}>
+        <nav style={S.nav}>
           {["field", "stats"].map((v) => (
             <button
               key={v}
-              style={{ ...styles.navBtn, ...(view === v ? styles.navBtnActive : {}) }}
+              style={{ ...S.navBtn, ...(view === v ? S.navBtnActive : {}) }}
               onClick={() => setView(v)}
             >
               {v === "field" ? "⚡ FIELD" : "📊 STATS"}
@@ -158,168 +165,174 @@ export default function FootyManager() {
         </nav>
       </header>
 
-      <div style={styles.timerBar}>
-        <div style={styles.quarters}>
+      {/* Timer bar */}
+      <div style={S.timerBar}>
+        <div style={S.quarters}>
           {QUARTERS.map((q) => (
             <div
               key={q}
               style={{
-                ...styles.quarterPip,
-                ...(q === quarter ? styles.quarterPipActive : {}),
-                ...(q < quarter ? styles.quarterPipDone : {}),
+                ...S.qPip,
+                ...(q === quarter ? S.qPipActive : {}),
+                ...(q < quarter ? S.qPipDone : {}),
               }}
             >
               Q{q}
             </div>
           ))}
         </div>
-        <div style={styles.timerDisplay}>
-          <span style={styles.timerMain}>{formatTime(elapsed)}</span>
-          <span style={styles.timerSep}>/</span>
-          <span style={styles.timerTotal}>{formatTime(QUARTER_DURATION)}</span>
+        <div style={S.timerRow}>
+          <span style={S.timerMain}>{formatTime(elapsed)}</span>
+          <span style={S.timerSep}>/</span>
+          <span style={S.timerSub}>{formatTime(QUARTER_DURATION)}</span>
         </div>
-        <div style={styles.progressOuter}>
-          <div style={{ ...styles.progressInner, width: `${quarterProgress}%` }} />
+        <div style={S.progressOuter}>
+          <div style={{ ...S.progressInner, width: `${quarterProgress}%` }} />
         </div>
-        <div style={styles.timerControls}>
+        <div style={S.controls}>
           <button
-            style={{ ...styles.ctrlBtn, ...(running ? styles.ctrlBtnPause : styles.ctrlBtnPlay) }}
+            style={{ ...S.btn, ...(running ? S.btnPause : S.btnPlay) }}
             onClick={() => setRunning((r) => !r)}
           >
             {running ? "⏸ PAUSE" : "▶ START"}
           </button>
           {quarter < 4 ? (
-            <button style={{ ...styles.ctrlBtn, ...styles.ctrlBtnNext }} onClick={nextQuarter}>
+            <button style={{ ...S.btn, ...S.btnNext }} onClick={nextQuarter}>
               NEXT QTR →
             </button>
           ) : (
-            <button style={{ ...styles.ctrlBtn, ...styles.ctrlBtnReset }} onClick={resetAll}>
+            <button style={{ ...S.btn, ...S.btnReset }} onClick={resetAll}>
               ↺ RESET
             </button>
           )}
-          <div style={styles.fieldCount}>
-            <span style={styles.fieldCountNum}>{onField.length}</span>
-            <span style={styles.fieldCountLabel}>on field</span>
+          <div style={S.fieldCount}>
+            <span style={S.fieldCountNum}>{onFieldPlayers.length}</span>
+            <span style={S.fieldCountLabel}>on field</span>
           </div>
         </div>
       </div>
 
-      <main style={styles.main}>
+      {/* Main */}
+      <main style={S.main}>
         {view === "field" ? (
-          <div style={styles.fieldView}>
-            <section style={styles.section}>
-              <div style={styles.sectionHeader}>
-                <div style={styles.sectionTitle}>
-                  <span style={styles.dot} />
+          <div style={S.twoCol}>
+            {/* On Field */}
+            <section>
+              <div style={S.secHeader}>
+                <div style={S.secTitle}>
+                  <span style={S.dot} />
                   ON FIELD
-                  <span style={styles.badge}>{onField.length}</span>
+                  <span style={S.badge}>{onFieldPlayers.length}</span>
                 </div>
-                {onField.length !== 16 && (
-                  <span style={{ ...styles.hint, color: onField.length > 16 ? "#ff5f57" : "#ffd60a" }}>
-                    {onField.length > 16 ? "⚠ Too many!" : `${16 - onField.length} spots left`}
+                {onFieldPlayers.length < 16 && (
+                  <span style={S.spotsLeft}>
+                    {16 - onFieldPlayers.length} spots left
                   </span>
                 )}
+                {onFieldPlayers.length > 16 && (
+                  <span style={{ ...S.spotsLeft, color: "#ff5f57" }}>⚠ Too many!</span>
+                )}
               </div>
-              <div style={styles.playerGrid}>
-                {onField.map((p) => (
+              <div style={S.grid}>
+                {onFieldPlayers.map((p) => (
                   <PlayerCard
                     key={p.id}
                     player={p}
-                    onField={true}
-                    quarter={quarter}
+                    onField
                     totalGameElapsed={totalGameElapsed}
                     onToggle={() => togglePlayer(p.id)}
                     onRemove={() => removePlayer(p.id)}
                   />
                 ))}
-                {onField.length === 0 && (
-                  <div style={styles.emptyMsg}>Tap bench players to add them →</div>
+                {onFieldPlayers.length === 0 && (
+                  <div style={S.empty}>Tap bench players to add →</div>
                 )}
               </div>
             </section>
 
-            <section style={styles.section}>
-              <div style={styles.sectionHeader}>
-                <div style={styles.sectionTitle}>
-                  <span style={{ ...styles.dot, background: "#636e72" }} />
+            {/* Bench */}
+            <section>
+              <div style={S.secHeader}>
+                <div style={{ ...S.secTitle }}>
+                  <span style={{ ...S.dot, background: "#636e72" }} />
                   BENCH
-                  <span style={{ ...styles.badge, background: "#2d3436", color: "#b2bec3" }}>{onBench.length}</span>
+                  <span style={{ ...S.badge, background: "#2d3436", color: "#b2bec3" }}>
+                    {benchPlayers.length}
+                  </span>
                 </div>
               </div>
-              <div style={styles.playerGrid}>
-                {onBench.map((p) => (
+              <div style={S.grid}>
+                {benchPlayers.map((p) => (
                   <PlayerCard
                     key={p.id}
                     player={p}
                     onField={false}
-                    quarter={quarter}
                     totalGameElapsed={totalGameElapsed}
                     onToggle={() => togglePlayer(p.id)}
                     onRemove={() => removePlayer(p.id)}
                   />
                 ))}
               </div>
-              <div style={styles.addPlayer}>
+              <div style={S.addRow}>
                 <input
-                  style={styles.addInput}
+                  style={S.addInput}
                   placeholder="Add player name…"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addPlayer()}
                 />
-                <button style={styles.addBtn} onClick={addPlayer}>+ ADD</button>
+                <button style={S.addBtn} onClick={addPlayer}>+ ADD</button>
               </div>
             </section>
           </div>
         ) : (
-          <StatsView players={players} quarter={quarter} totalGameElapsed={totalGameElapsed} />
+          <StatsView players={players} totalGameElapsed={totalGameElapsed} />
         )}
       </main>
     </div>
   );
 }
 
-function PlayerCard({ player, onField, quarter, totalGameElapsed, onToggle, onRemove }) {
-  const qTime = player.fieldTime[quarter - 1];
-  const totalFieldTime = player.fieldTime.reduce((a, b) => a + b, 0);
-  const usage = pct(totalFieldTime, totalGameElapsed);
+// ─── Player Card ────────────────────────────────────────────────────────────
+
+function PlayerCard({ player, onField, totalGameElapsed, onToggle, onRemove }) {
+  const usage = gamePct(player.fieldTime, totalGameElapsed);
+  const usageColor = usage >= 70 ? "#00b894" : usage >= 40 ? "#ffd60a" : "#ff5f57";
 
   return (
-    <div style={{ ...styles.card, ...(onField ? styles.cardOn : styles.cardOff) }}>
-      <div style={styles.cardTop}>
-        <div style={styles.playerName}>{player.name}</div>
-        <button style={styles.removeBtn} onClick={(e) => { e.stopPropagation(); onRemove(); }}>✕</button>
+    <div style={{ ...S.card, ...(onField ? S.cardOn : S.cardOff) }}>
+      <div style={S.cardTop}>
+        <div style={S.playerName}>{player.name}</div>
+        <button
+          style={S.removeBtn}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        >✕</button>
       </div>
-      <div style={styles.cardTimes}>
-        <div style={styles.timeBlock}>
-          <span style={styles.timeVal}>{formatTime(qTime)}</span>
-          <span style={styles.timeLabel}>Q{quarter}</span>
-        </div>
-        <div style={styles.timeDivider} />
-        <div style={styles.timeBlock}>
-          <span style={styles.timeVal}>{formatTime(totalFieldTime)}</span>
-          <span style={styles.timeLabel}>TOTAL</span>
-        </div>
-        <div style={styles.timeDivider} />
-        <div style={styles.timeBlock}>
-          <span style={{
-            ...styles.timeVal,
-            color: usage >= 70 ? "#00b894" : usage >= 40 ? "#ffd60a" : "#ff5f57"
-          }}>
-            {usage}%
-          </span>
-          <span style={styles.timeLabel}>GAME%</span>
-        </div>
+
+      {/* Big cumulative total */}
+      <div style={S.bigTime}>{formatTime(player.fieldTime)}</div>
+      <div style={S.bigTimeLabel}>TOTAL FIELD TIME</div>
+
+      {/* Quarter breakdown */}
+      <div style={S.qBreakdown}>
+        {player.quarterTimes.map((t, i) => (
+          <div key={i} style={S.qBreakItem}>
+            <span style={S.qBreakVal}>{formatTime(t)}</span>
+            <span style={S.qBreakLabel}>Q{i + 1}</span>
+          </div>
+        ))}
       </div>
-      <div style={styles.usageBar}>
-        <div style={{
-          ...styles.usageFill,
-          width: `${usage}%`,
-          background: usage >= 70 ? "#00b894" : usage >= 40 ? "#ffd60a" : "#ff5f57"
-        }} />
+
+      {/* Usage bar + % of elapsed game time */}
+      <div style={S.usageRow}>
+        <div style={S.usageBar}>
+          <div style={{ ...S.usageFill, width: `${usage}%`, background: usageColor }} />
+        </div>
+        <span style={{ ...S.usagePct, color: usageColor }}>{usage}%</span>
       </div>
+
       <button
-        style={{ ...styles.toggleBtn, ...(onField ? styles.toggleOff : styles.toggleOn) }}
+        style={{ ...S.toggleBtn, ...(onField ? S.toggleOff : S.toggleOn) }}
         onClick={onToggle}
       >
         {onField ? "→ BENCH" : "→ FIELD"}
@@ -328,50 +341,50 @@ function PlayerCard({ player, onField, quarter, totalGameElapsed, onToggle, onRe
   );
 }
 
-function StatsView({ players, quarter, totalGameElapsed }) {
-  const sorted = [...players].sort(
-    (a, b) => b.fieldTime.reduce((x, y) => x + y, 0) - a.fieldTime.reduce((x, y) => x + y, 0)
-  );
+// ─── Stats View ──────────────────────────────────────────────────────────────
+
+function StatsView({ players, totalGameElapsed }) {
+  const sorted = [...players].sort((a, b) => b.fieldTime - a.fieldTime);
 
   return (
-    <div style={styles.statsView}>
-      <div style={styles.statsHeader}>
-        <div style={styles.statsMeta}>
-          Q{quarter} · {formatTime(totalGameElapsed)} game time elapsed
-        </div>
+    <div style={S.statsView}>
+      <div style={S.statsMeta}>
+        Ranked by field time · % of {formatTime(totalGameElapsed)} elapsed game time
       </div>
-      <div style={styles.statsTable}>
-        <div style={styles.statsRow}>
-          <div style={{ ...styles.statsCell, ...styles.statsCellHead, flex: 2 }}>PLAYER</div>
-          {[1, 2, 3, 4].map((q) => (
-            <div key={q} style={{ ...styles.statsCell, ...styles.statsCellHead }}>Q{q}</div>
-          ))}
-          <div style={{ ...styles.statsCell, ...styles.statsCellHead }}>TOTAL</div>
-          <div style={{ ...styles.statsCell, ...styles.statsCellHead }}>GAME%</div>
+      <div style={S.statsTable}>
+        <div style={S.statsRow}>
+          <div style={{ ...S.cell, ...S.cellHead, flex: 2 }}>PLAYER</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>Q1</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>Q2</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>Q3</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>Q4</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>TOTAL</div>
+          <div style={{ ...S.cell, ...S.cellHead }}>GAME%</div>
         </div>
         {sorted.map((p, i) => {
-          const total = p.fieldTime.reduce((a, b) => a + b, 0);
-          const usage = pct(total, totalGameElapsed);
+          const usage = gamePct(p.fieldTime, totalGameElapsed);
+          const usageColor = usage >= 70 ? "#00b894" : usage >= 40 ? "#ffd60a" : "#ff5f57";
           return (
-            <div key={p.id} style={{ ...styles.statsRow, background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }}>
-              <div style={{ ...styles.statsCell, flex: 2, fontWeight: 600, color: "#dfe6e9" }}>
-                <span style={styles.rankNum}>{i + 1}</span>
-                {p.name}
+            <div
+              key={p.id}
+              style={{ ...S.statsRow, background: i % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent" }}
+            >
+              <div style={{ ...S.cell, flex: 2, fontWeight: 600, color: "#dfe6e9" }}>
+                <span style={S.rank}>{i + 1}</span>{p.name}
               </div>
-              {p.fieldTime.map((t, qi) => (
-                <div key={qi} style={{ ...styles.statsCell, color: t > 0 ? "#b2bec3" : "#4a5568" }}>
+              {p.quarterTimes.map((t, qi) => (
+                <div key={qi} style={{ ...S.cell, color: t > 0 ? "#b2bec3" : "#4a5568" }}>
                   {t > 0 ? formatTime(t) : "–"}
                 </div>
               ))}
-              <div style={{ ...styles.statsCell, fontWeight: 700, color: "#dfe6e9" }}>{formatTime(total)}</div>
-              <div style={styles.statsCell}>
+              <div style={{ ...S.cell, fontWeight: 700, color: "#dfe6e9" }}>
+                {formatTime(p.fieldTime)}
+              </div>
+              <div style={S.cell}>
                 <span style={{
-                  padding: "2px 8px",
-                  borderRadius: 4,
-                  fontSize: 12,
-                  fontWeight: 700,
+                  padding: "2px 8px", borderRadius: 4, fontSize: 12, fontWeight: 700,
                   background: usage >= 70 ? "rgba(0,184,148,0.2)" : usage >= 40 ? "rgba(255,214,10,0.2)" : "rgba(255,95,87,0.2)",
-                  color: usage >= 70 ? "#00b894" : usage >= 40 ? "#ffd60a" : "#ff5f57",
+                  color: usageColor,
                 }}>
                   {usage}%
                 </span>
@@ -384,33 +397,24 @@ function StatsView({ players, quarter, totalGameElapsed }) {
   );
 }
 
-const styles = {
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
+const S = {
   root: {
     minHeight: "100vh",
     background: "#0d1117",
     color: "#dfe6e9",
-    fontFamily: "'DM Mono', 'Fira Mono', 'Courier New', monospace",
+    fontFamily: "'DM Mono','Fira Mono','Courier New',monospace",
     position: "relative",
-    overflow: "hidden",
   },
   grain: {
-    position: "fixed",
-    inset: 0,
-    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
-    pointerEvents: "none",
-    zIndex: 0,
+    position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0,
+    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E")`,
   },
   header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "16px 24px",
-    borderBottom: "1px solid rgba(255,255,255,0.06)",
-    background: "rgba(13,17,23,0.9)",
-    backdropFilter: "blur(12px)",
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "16px 24px", borderBottom: "1px solid rgba(255,255,255,0.06)",
+    background: "rgba(13,17,23,0.95)", position: "sticky", top: 0, zIndex: 10,
   },
   logo: { display: "flex", alignItems: "center", gap: 12 },
   logoIcon: { fontSize: 28 },
@@ -418,273 +422,73 @@ const styles = {
   logoSub: { fontSize: 10, color: "#636e72", letterSpacing: 2, marginTop: 2 },
   nav: { display: "flex", gap: 8 },
   navBtn: {
-    background: "transparent",
-    border: "1px solid rgba(255,255,255,0.1)",
-    color: "#636e72",
-    padding: "8px 16px",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontSize: 11,
-    fontFamily: "inherit",
-    letterSpacing: 2,
-    fontWeight: 600,
-    transition: "all 0.2s",
+    background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "#636e72",
+    padding: "8px 16px", borderRadius: 6, cursor: "pointer", fontSize: 11,
+    fontFamily: "inherit", letterSpacing: 2, fontWeight: 600,
   },
-  navBtnActive: {
-    background: "rgba(255,214,10,0.1)",
-    borderColor: "#ffd60a",
-    color: "#ffd60a",
-  },
+  navBtnActive: { background: "rgba(255,214,10,0.1)", borderColor: "#ffd60a", color: "#ffd60a" },
   timerBar: {
-    padding: "16px 24px",
-    background: "rgba(255,255,255,0.02)",
-    borderBottom: "1px solid rgba(255,255,255,0.06)",
-    position: "relative",
-    zIndex: 5,
+    padding: "16px 24px", background: "rgba(255,255,255,0.02)",
+    borderBottom: "1px solid rgba(255,255,255,0.06)", position: "relative", zIndex: 5,
   },
   quarters: { display: "flex", gap: 8, marginBottom: 12 },
-  quarterPip: {
-    padding: "4px 12px",
-    borderRadius: 4,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: 2,
-    border: "1px solid rgba(255,255,255,0.1)",
-    color: "#4a5568",
-    background: "transparent",
+  qPip: {
+    padding: "4px 12px", borderRadius: 4, fontSize: 11, fontWeight: 700,
+    letterSpacing: 2, border: "1px solid rgba(255,255,255,0.1)", color: "#4a5568",
   },
-  quarterPipActive: {
-    background: "rgba(255,214,10,0.15)",
-    borderColor: "#ffd60a",
-    color: "#ffd60a",
-  },
-  quarterPipDone: {
-    background: "rgba(0,184,148,0.1)",
-    borderColor: "#00b894",
-    color: "#00b894",
-  },
-  timerDisplay: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: 6,
-    marginBottom: 8,
-  },
+  qPipActive: { background: "rgba(255,214,10,0.15)", borderColor: "#ffd60a", color: "#ffd60a" },
+  qPipDone: { background: "rgba(0,184,148,0.1)", borderColor: "#00b894", color: "#00b894" },
+  timerRow: { display: "flex", alignItems: "baseline", gap: 6, marginBottom: 8 },
   timerMain: { fontSize: 36, fontWeight: 700, color: "#fff", letterSpacing: 2 },
   timerSep: { fontSize: 20, color: "#4a5568" },
-  timerTotal: { fontSize: 18, color: "#636e72" },
-  progressOuter: {
-    height: 4,
-    background: "rgba(255,255,255,0.06)",
-    borderRadius: 2,
-    marginBottom: 12,
-    overflow: "hidden",
-  },
-  progressInner: {
-    height: "100%",
-    background: "linear-gradient(90deg, #ffd60a, #ff9f43)",
-    borderRadius: 2,
-    transition: "width 1s linear",
-  },
-  timerControls: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
-  ctrlBtn: {
-    padding: "9px 20px",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-    fontSize: 12,
-    fontFamily: "inherit",
-    fontWeight: 700,
-    letterSpacing: 2,
-    transition: "all 0.15s",
-  },
-  ctrlBtnPlay: { background: "#ffd60a", color: "#0d1117" },
-  ctrlBtnPause: { background: "#ff9f43", color: "#0d1117" },
-  ctrlBtnNext: { background: "#0984e3", color: "#fff" },
-  ctrlBtnReset: { background: "#2d3436", color: "#b2bec3", border: "1px solid rgba(255,255,255,0.1)" },
-  fieldCount: {
-    marginLeft: "auto",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-  },
+  timerSub: { fontSize: 18, color: "#636e72" },
+  progressOuter: { height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, marginBottom: 12, overflow: "hidden" },
+  progressInner: { height: "100%", background: "linear-gradient(90deg,#ffd60a,#ff9f43)", borderRadius: 2, transition: "width 1s linear" },
+  controls: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  btn: { padding: "9px 20px", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontFamily: "inherit", fontWeight: 700, letterSpacing: 2 },
+  btnPlay: { background: "#ffd60a", color: "#0d1117" },
+  btnPause: { background: "#ff9f43", color: "#0d1117" },
+  btnNext: { background: "#0984e3", color: "#fff" },
+  btnReset: { background: "#2d3436", color: "#b2bec3", border: "1px solid rgba(255,255,255,0.1)" },
+  fieldCount: { marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "center" },
   fieldCountNum: { fontSize: 28, fontWeight: 700, color: "#ffd60a", lineHeight: 1 },
   fieldCountLabel: { fontSize: 10, color: "#636e72", letterSpacing: 2, marginTop: 2 },
   main: { padding: "24px", position: "relative", zIndex: 1 },
-  fieldView: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 24,
-  },
-  section: {},
-  sectionHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: 3,
-    color: "#b2bec3",
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: "50%",
-    background: "#ffd60a",
-    boxShadow: "0 0 8px #ffd60a",
-  },
-  badge: {
-    background: "rgba(255,214,10,0.15)",
-    color: "#ffd60a",
-    borderRadius: 4,
-    padding: "1px 7px",
-    fontSize: 11,
-  },
-  hint: { fontSize: 11, fontWeight: 600, letterSpacing: 1 },
-  playerGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-    gap: 10,
-    marginBottom: 12,
-  },
-  card: {
-    borderRadius: 8,
-    padding: 12,
-    border: "1px solid",
-    transition: "all 0.2s",
-    cursor: "default",
-  },
-  cardOn: {
-    background: "rgba(255,214,10,0.05)",
-    borderColor: "rgba(255,214,10,0.25)",
-  },
-  cardOff: {
-    background: "rgba(255,255,255,0.02)",
-    borderColor: "rgba(255,255,255,0.06)",
-  },
-  cardTop: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 8,
-  },
+  twoCol: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 },
+  secHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  secTitle: { display: "flex", alignItems: "center", gap: 8, fontSize: 11, fontWeight: 700, letterSpacing: 3, color: "#b2bec3" },
+  dot: { width: 8, height: 8, borderRadius: "50%", background: "#ffd60a", boxShadow: "0 0 8px #ffd60a" },
+  badge: { background: "rgba(255,214,10,0.15)", color: "#ffd60a", borderRadius: 4, padding: "1px 7px", fontSize: 11 },
+  spotsLeft: { fontSize: 11, fontWeight: 600, letterSpacing: 1, color: "#ffd60a" },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 10, marginBottom: 12 },
+  empty: { color: "#4a5568", fontSize: 12, padding: "20px 0", letterSpacing: 1 },
+  card: { borderRadius: 8, padding: 12, border: "1px solid", transition: "all 0.2s" },
+  cardOn: { background: "rgba(255,214,10,0.05)", borderColor: "rgba(255,214,10,0.25)" },
+  cardOff: { background: "rgba(255,255,255,0.02)", borderColor: "rgba(255,255,255,0.06)" },
+  cardTop: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 },
   playerName: { fontSize: 13, fontWeight: 700, color: "#dfe6e9", lineHeight: 1.2 },
-  removeBtn: {
-    background: "transparent",
-    border: "none",
-    color: "#4a5568",
-    cursor: "pointer",
-    fontSize: 10,
-    padding: "0 2px",
-    lineHeight: 1,
-    fontFamily: "inherit",
-  },
-  cardTimes: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 8,
-  },
-  timeBlock: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    flex: 1,
-  },
-  timeVal: { fontSize: 13, fontWeight: 700, color: "#dfe6e9", letterSpacing: 1, lineHeight: 1 },
-  timeLabel: { fontSize: 9, color: "#636e72", letterSpacing: 1, marginTop: 2 },
-  timeDivider: { width: 1, height: 24, background: "rgba(255,255,255,0.08)" },
-  usageBar: {
-    height: 3,
-    background: "rgba(255,255,255,0.06)",
-    borderRadius: 2,
-    marginBottom: 10,
-    overflow: "hidden",
-  },
-  usageFill: {
-    height: "100%",
-    borderRadius: 2,
-    transition: "width 1s linear",
-  },
-  toggleBtn: {
-    width: "100%",
-    padding: "7px",
-    border: "none",
-    borderRadius: 5,
-    cursor: "pointer",
-    fontSize: 10,
-    fontFamily: "inherit",
-    fontWeight: 700,
-    letterSpacing: 2,
-    transition: "all 0.15s",
-  },
+  removeBtn: { background: "transparent", border: "none", color: "#4a5568", cursor: "pointer", fontSize: 10, padding: "0 2px", fontFamily: "inherit" },
+  bigTime: { fontSize: 24, fontWeight: 700, color: "#fff", letterSpacing: 2, textAlign: "center", marginBottom: 2 },
+  bigTimeLabel: { fontSize: 9, color: "#636e72", letterSpacing: 2, textAlign: "center", marginBottom: 6 },
+  qBreakdown: { display: "flex", justifyContent: "space-between", marginBottom: 8, gap: 2 },
+  qBreakItem: { display: "flex", flexDirection: "column", alignItems: "center", flex: 1 },
+  qBreakVal: { fontSize: 10, fontWeight: 600, color: "#b2bec3", letterSpacing: 1 },
+  qBreakLabel: { fontSize: 8, color: "#4a5568", letterSpacing: 1, marginTop: 1 },
+  usageRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 10 },
+  usageBar: { flex: 1, height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" },
+  usageFill: { height: "100%", borderRadius: 2, transition: "width 1s linear" },
+  usagePct: { fontSize: 11, fontWeight: 700, minWidth: 34, textAlign: "right" },
+  toggleBtn: { width: "100%", padding: "7px", border: "none", borderRadius: 5, cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: 700, letterSpacing: 2 },
   toggleOn: { background: "rgba(255,214,10,0.15)", color: "#ffd60a" },
   toggleOff: { background: "rgba(255,255,255,0.06)", color: "#b2bec3" },
-  addPlayer: { display: "flex", gap: 8, marginTop: 4 },
-  addInput: {
-    flex: 1,
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 6,
-    padding: "8px 12px",
-    color: "#dfe6e9",
-    fontSize: 12,
-    fontFamily: "inherit",
-    outline: "none",
-  },
-  addBtn: {
-    background: "rgba(255,214,10,0.1)",
-    border: "1px solid rgba(255,214,10,0.3)",
-    color: "#ffd60a",
-    borderRadius: 6,
-    padding: "8px 14px",
-    cursor: "pointer",
-    fontFamily: "inherit",
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: 1,
-  },
-  emptyMsg: { color: "#4a5568", fontSize: 12, padding: "20px 0", letterSpacing: 1 },
+  addRow: { display: "flex", gap: 8, marginTop: 4 },
+  addInput: { flex: 1, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "8px 12px", color: "#dfe6e9", fontSize: 12, fontFamily: "inherit", outline: "none" },
+  addBtn: { background: "rgba(255,214,10,0.1)", border: "1px solid rgba(255,214,10,0.3)", color: "#ffd60a", borderRadius: 6, padding: "8px 14px", cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 700, letterSpacing: 1 },
   statsView: { maxWidth: 900, margin: "0 auto" },
-  statsHeader: { marginBottom: 16 },
-  statsMeta: { fontSize: 11, color: "#636e72", letterSpacing: 2 },
-  statsTable: {
-    background: "rgba(255,255,255,0.02)",
-    border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: 10,
-    overflow: "hidden",
-  },
-  statsRow: {
-    display: "flex",
-    alignItems: "center",
-    borderBottom: "1px solid rgba(255,255,255,0.04)",
-  },
-  statsCell: {
-    flex: 1,
-    padding: "12px 10px",
-    fontSize: 12,
-    color: "#636e72",
-    textAlign: "center",
-  },
-  statsCellHead: {
-    fontSize: 10,
-    fontWeight: 700,
-    letterSpacing: 2,
-    color: "#4a5568",
-    background: "rgba(255,255,255,0.03)",
-    borderBottom: "1px solid rgba(255,255,255,0.08)",
-  },
-  rankNum: {
-    display: "inline-block",
-    width: 20,
-    fontSize: 10,
-    color: "#4a5568",
-    marginRight: 6,
-  },
+  statsMeta: { fontSize: 11, color: "#636e72", letterSpacing: 2, marginBottom: 16 },
+  statsTable: { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, overflow: "hidden" },
+  statsRow: { display: "flex", alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.04)" },
+  cell: { flex: 1, padding: "12px 10px", fontSize: 12, color: "#636e72", textAlign: "center" },
+  cellHead: { fontSize: 10, fontWeight: 700, letterSpacing: 2, color: "#4a5568", background: "rgba(255,255,255,0.03)", borderBottom: "1px solid rgba(255,255,255,0.08)" },
+  rank: { display: "inline-block", width: 20, fontSize: 10, color: "#4a5568", marginRight: 6 },
 };
-
